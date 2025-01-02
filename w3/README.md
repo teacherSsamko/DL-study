@@ -3,7 +3,7 @@
 
 
 ## Q2) 모델은 어떻게 설계하셨나요? 설계한 모델의 입력과 출력 형태가 어떻게 되나요?
-> 모델의 입력과 출력 형태 또는 shape을 정확하게 기술
+> 모델은 distilBert를 encoder로 사용하고, classifier 부분은 데이터의 레이블 수와 동일하게 출력을 3으로 해주었습니다.
 
 
 ## Q3) 어떤 pre-trained 모델을 활용하셨나요?
@@ -11,11 +11,7 @@
 
 
 ## Q4) 실제로 pre-trained 모델을 fine-tuning했을 때 loss curve은 어떻게 그려지나요? 그리고 pre-train 하지 않은 Transformer를 학습했을 때와 어떤 차이가 있나요? 
-> 비교 metric은 loss curve, accuracy, 또는 test data에 대한 generalization 성능 등을 활용.
-> +)이외에도 기계 번역 같은 문제에서 활용하는 BLEU 등의 metric을 마음껏 활용 가능
-- 
--  
--  
-- 이미지 첨부시 : ![이미지 설명](경로) / 예시: ![poster](./image.png)
+> loss curve는 scratch(pre-train 하지 않은 Transformer) 모델이 더 빠르게 감소하는 것으로 나타났습니다.
+> 하지만, test accuracy를 비교한 결과 fine-tuning한 모델은 47.7%, scratch 모델은 39%로 일반적인 학습이 잘 이루어졌다기보다는
+> 학습데이터에 치중한 학습이 이루어졌다고 볼 수 있습니다.  
 
-### 코드 및 실행 결과는 jupyter notebook 형태로 같이 public github repository에 업로드하여 공유해주시면 됩니다(반드시 출력 결과가 남아있어야 합니다!!) 
