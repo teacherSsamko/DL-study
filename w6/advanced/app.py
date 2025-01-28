@@ -4,7 +4,7 @@ import streamlit as st
 from github import Github
 from github.GithubException import UnknownObjectException
 from dotenv import load_dotenv
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 
 # 환경 변수 로드
@@ -35,57 +35,64 @@ def is_valid_github_url(url):
 
 
 def get_repo_contents(url):
-    """레포지토리의 주요 코드 파일들을 가져옴"""
+    """레포지토리의 주요 코드 파일들과 README를 가져옴"""
     parts = url.strip("/").split("/")
     owner = parts[-2]
     repo = parts[-1]
 
     repo = github_client.get_repo(f"{owner}/{repo}")
     contents = []
+    readme_content = ""
 
     def process_contents(repo_contents):
         for content in repo_contents:
             if content.type == "dir":
                 process_contents(repo.get_contents(content.path))
-            elif content.type == "file" and content.path.endswith(
-                (".py", ".js", ".java", ".cpp", ".ts")
-            ):
-                contents.append(
-                    {
-                        "path": content.path,
-                        "content": content.decoded_content.decode("utf-8"),
-                    }
-                )
+            elif content.type == "file":
+                if content.name.lower() == "readme.md":
+                    readme_content = content.decoded_content.decode("utf-8")
+                elif content.path.endswith((".py", ".js", ".java", ".cpp", ".ts")):
+                    contents.append(
+                        {
+                            "path": content.path,
+                            "content": content.decoded_content.decode("utf-8"),
+                            "url": content.html_url,  # GitHub 파일 링크 추가
+                        }
+                    )
 
     process_contents(repo.get_contents(""))
-    return contents
+    return contents, readme_content
 
 
-def analyze_code(contents):
-    """GPT를 사용하여 코드 분석"""
+def analyze_code(contents, readme_content):
+    """GPT를 사용하여 코드와 README 분석"""
     system_message = SystemMessage(
         content="""
-        당신은 전문적인 코드 리뷰어입니다. 주어진 코드를 분석하여 다음 항목들을 평가해주세요:
+        당신은 전문적인 코드 리뷰어입니다. README 내용과 코드를 분석하여 다음 항목들을 평가해주세요:
+
+        1. 프로젝트 개요:
+        - README를 기반으로 한 프로젝트의 목적과 주요 기능
         
-        1. 잘된 점:
+        2. 잘된 점:
         - 코드 구조
         - 네이밍 컨벤션
         - 모듈화/재사용성
         - 문서화
         
-        2. 개선이 필요한 점:
+        3. 개선이 필요한 점:
         - 잠재적인 버그
         - 성능 이슈
         - 보안 취약점
         - 코드 스타일 개선사항
         
-        각 항목에 대해 구체적인 예시와 개선 방안을 함께 제시해주세요.
+        각 항목에 대해 구체적인 예시와 개선 방안을 제시하고, 관련된 파일의 GitHub 링크를 함께 표시해주세요.
         """
     )
 
-    human_message = HumanMessage(content=str(contents))
+    # README와 코드 내용을 함께 전달
+    content_with_links = {"readme": readme_content, "files": contents}
 
-    # messages 리스트로 직접 전달
+    human_message = HumanMessage(content=str(content_with_links))
     messages = [system_message, human_message]
 
     response = llm.invoke(messages)
@@ -104,11 +111,11 @@ if repo_url:
     else:
         with st.spinner("레포지토리 분석 중..."):
             try:
-                # 코드 가져오기
-                contents = get_repo_contents(repo_url)
+                # 코드와 README 가져오기
+                contents, readme_content = get_repo_contents(repo_url)
 
                 # 코드 분석
-                analysis = analyze_code(contents)
+                analysis = analyze_code(contents, readme_content)
 
                 # 결과 표시
                 st.success("분석이 완료되었습니다!")
