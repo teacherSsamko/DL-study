@@ -5,3 +5,4 @@ python-dotenv
 PyGithub
 langchain-community
 langchain-openai
+langchain-chroma

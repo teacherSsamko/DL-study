@@ -6,6 +6,15 @@ from github.GithubException import UnknownObjectException
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains import (
+    create_history_aware_retriever,
+    create_retrieval_chain,
+)
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # 환경 변수 로드
 load_dotenv()
@@ -13,6 +22,7 @@ load_dotenv()
 # GitHub 및 OpenAI 클라이언트 초기화
 github_client = Github(os.getenv("GITHUB_TOKEN"))
 llm = ChatOpenAI(model="gpt-3.5-turbo-16k")
+embeddings = OpenAIEmbeddings()
 # llm = ChatOpenAI(model="gpt-4")
 
 
@@ -115,6 +125,86 @@ def analyze_code(contents, readme_content):
     return response.content
 
 
+def create_vector_db(contents, readme_content):
+    """코드와 README를 벡터 DB에 저장"""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len,
+    )
+
+    documents = []
+
+    # README 처리
+    if readme_content:
+        readme_chunks = text_splitter.split_text(readme_content)
+        for chunk in readme_chunks:
+            documents.append(f"[README.md] {chunk}")
+
+    # 코드 파일 처리
+    for file in contents:
+        code_chunks = text_splitter.split_text(file["content"])
+        for chunk in code_chunks:
+            documents.append(f"[{file['path']}] {chunk}")
+
+    # Chroma DB 생성
+    vectordb = Chroma.from_texts(
+        texts=documents, embedding=embeddings, persist_directory="./chroma_db"
+    )
+
+    return vectordb
+
+
+def setup_qa_chain(vectordb):
+    """QA 체인 설정"""
+    # 컨텍스트를 고려한 질문 생성을 위한 프롬프트
+    contextualize_q_system_prompt = """
+    주어진 대화 기록과 최신 질문을 바탕으로, 
+    대화 기록 없이도 이해할 수 있는 독립적인 질문을 만드세요.
+    질문에 답하지 말고, 필요한 경우 질문을 재구성하거나 그대로 반환하세요.
+    """
+
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    # 컨텍스트 인식 검색기 생성
+    retriever = create_history_aware_retriever(
+        llm, vectordb.as_retriever(), contextualize_q_prompt
+    )
+
+    # 질문 응답을 위한 프롬프트
+    qa_system_prompt = """
+    당신은 코드 리뷰 전문가입니다. 
+    주어진 컨텍스트를 사용하여 질문에 답변하세요. 
+    답을 모르는 경우 모른다고 말씀하세요. 
+    최대 세 문장으로 간단명료하게 답변하세요.
+    
+    컨텍스트:
+    {context}
+    """
+
+    qa_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", qa_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    # 문서 결합 체인 생성
+    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+
+    # 최종 검색 체인 생성
+    qa_chain = create_retrieval_chain(retriever, question_answer_chain)
+
+    return qa_chain
+
+
 # Streamlit UI
 st.title("GitHub 레포지토리 코드 리뷰 챗봇")
 
@@ -130,16 +220,54 @@ if repo_url:
                 # 코드와 README 가져오기
                 contents, readme_content = get_repo_contents(repo_url)
 
-                # 코드 분석
-                analysis = analyze_code(contents, readme_content)
+                # 초기 코드 분석 수행
+                if "initial_analysis" not in st.session_state:
+                    analysis = analyze_code(contents, readme_content)
+                    st.session_state.initial_analysis = analysis
 
-                # 결과 표시
-                st.success("분석이 완료되었습니다!")
-                st.markdown("## 코드 리뷰 결과")
-                st.markdown(analysis)
+                    # 벡터 DB 생성 및 QA 체인 설정
+                    vectordb = create_vector_db(contents, readme_content)
+                    st.session_state.qa_chain = setup_qa_chain(vectordb)
+
+                # 초기 분석 결과 표시
+                st.markdown("## 초기 코드 리뷰 결과")
+                st.markdown(st.session_state.initial_analysis)
+
+                # 추가 질의응답 섹션
+                st.markdown("---")
+                st.markdown("## 추가 질문하기")
+                st.markdown("코드에 대해 더 자세히 알고 싶은 점을 질문해주세요.")
+
+                # 채팅 기록 초기화
+                if "chat_history" not in st.session_state:
+                    st.session_state.chat_history = []
+
+                question = st.text_input("질문을 입력하세요:", key="question_input")
+
+                if question:
+                    with st.spinner("답변 생성 중..."):
+                        result = st.session_state.qa_chain.invoke(
+                            {
+                                "input": question,
+                                "chat_history": st.session_state.chat_history,
+                            }
+                        )
+
+                        # 채팅 기록 업데이트
+                        st.session_state.chat_history.extend(
+                            [("human", question), ("assistant", result["answer"])]
+                        )
+
+                        st.markdown("### 답변:")
+                        st.markdown(result["answer"])
+
+                        # 참조된 소스 코드 표시
+                        with st.expander("참조된 소스 코드 보기"):
+                            for doc in result["context"]:
+                                st.code(doc.page_content)
 
             except Exception as e:
-                st.error(f"분석 중 오류가 발생했습니다: {str(e)}")
+                st.error(f"오류가 발생했습니다: {str(e)}")
 
 # 사용 방법 안내
 with st.expander("사용 방법"):
