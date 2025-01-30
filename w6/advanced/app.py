@@ -61,7 +61,9 @@ def get_repo_contents(url):
             elif content.type == "file":
                 if content.name.lower() == "readme.md":
                     readme_content = content.decoded_content.decode("utf-8")
-                elif content.path.endswith((".py", ".js", ".java", ".cpp", ".ts")):
+                elif content.path.endswith(
+                    (".py", ".js", ".java", ".cpp", ".ts", ".dart", ".go", ".rs")
+                ):
                     contents.append(
                         {
                             "path": content.path,
@@ -279,6 +281,6 @@ with st.expander("사용 방법"):
     
     **참고**: 
     - 큰 레포지토리의 경우 분석에 시간이 걸릴 수 있습니다.
-    - 현재는 Python, JavaScript, Java, C++, TypeScript 파일만 분석합니다.
+    - 현재는 Python, JavaScript, Java, C++, TypeScript, Dart, Go, Rust 파일만 분석합니다.
     """
     )
